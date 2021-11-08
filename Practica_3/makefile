@@ -2,13 +2,13 @@
 CC = gcc -Wall
 
 # Ficheros fuente
-SRCS = ejercicio_4.c ejercicio_7.c ejercicio_8.c
+SRCS = ej4.c ej7.c ej8.c
 
 # Nombres de los ejecutables: nombres de los ficheros fuente sin extensión
-OUTPUTS = $(SRCS_1:.c=)
+OUTPUTS = $(SRCS:.c=)
 
 # Archivos objeto (.o con un .c análogo como fichero fuente)
-OBJS = $(SRCS_1:.c=.o)
+OBJS = $(SRCS:.c=.o)
 
 # Regla 1
 # Creamos el ejecutable de cada programa
@@ -16,8 +16,8 @@ all: $(OUTPUTS)
 
 # Regla 2
 # Creamos el ejecutable de los programas principales
-$(OUTPUTS): $(OBJS) 
-	$(CC) -o $(OUTPUTS) $(OBJS)
+$(OUTPUTS): %: %.o
+	$(CC) -o $@ $<
 
 # Regla 3
 # Creamos los archivos .o a partir de sus correspondientes .c

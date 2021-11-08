@@ -9,25 +9,61 @@
 /*
  * Xiana Carrera Alonso
  * Sistemas Operativos I - Curso 2021/2022
+ * Práctica 3 - Ejercicio 7
  *
+ * Este programa utiliza una configuración personalizada de las señales
+ * SIGUSR1 y SIGUSR2 para un proceso padre, P. El flujo es el siguiente:
+ *   - P asigna gestores a SIGUSR1 y SIGUSR2.
+ *   - P bloquea la señal SIGUSR1.
+ *   - P crea un proceso hijo, H1, que a su vez genera un nieto, N1. Después,
+ *          P se bloquea con pause().
+ *   - H1 envía la señal SIGUSR1 a P y espera a que termine N1.
+ *   - N1 envía la señal SIGUSR2 a P y termina.
+ *   - H1 termina. Al mismo tiempo, P despierta al recibir SIGUSR2.
+ *   - P comprueba que la senhal SIGUSR1 está pendiente y la desbloquea.
+ *   - P procesa SIGUSR1.
+ *   - P espera a que H1 acabe (ya habrá sucedido en este punto). Recupera
+ *          el valor de su exit(), que será el PID de N1, y lo muestra.
+ *   - P termina.
+ *
+ * Estos pasos se indican por consola mostrando la hora con precisión de
+ * milisegundos.
  */
 
+#define ROJO "\e[1;31m"        // Proceso padre
+#define VERDE "\e[1;32m"       // Proceso hijo
+#define MAGENTA "\e[1;35m"     // Gestión de señales
+#define CYAN "\e[1;36m"        // Proceso nieto
+#define RESET "\e[0m"          // Errores (color predeterminado)
 
 
+// Función gestora de SIGUSR1
 void gestion_sigusr1(int numero_de_senhal);
+// Función gestora de SIGUSR2
 void gestion_sigusr2(int numero_de_senhal);
-int crear_proceso();
+
+// Función en la que trabaja H1
 void ejecutar_h1(int p, int n1);
+// Función en la que trabaja N1
 void ejecutar_n1(int p);
-void imprimir_mensaje_y_hora(char * msg, int error);
+
+// Encapsulación de un fork() con tratamiento de errores
+pid_t crear_proceso();
+// Función que imprime la fecha y hora actuales junto con un mensaje
+// (que puede ser de error o no) pudiendo elegir el color
+void imprimir_mensaje_y_hora(char * msg, int error, char * color);
+
+
 
 int main(){
-    int p;
-    int div_h1, div_n1;
-    int status;
-    struct sigaction nueva_accion;
-    sigset_t mascara, pendientes;
-    int es_miembro;
+    struct sigaction nueva_accion;   // Estructura para definir con sigaction()
+                                     // la manera de reaccionar a una
+    sigset_t mascara;        // Conjunto de señales bloqueadas
+    sigset_t pendientes;     // Conjunto de señales pendientes de gestionarse
+    pid_t p;                 // PID del proceso padre
+    pid_t div_h1, div_n1;    // Resultados de fork() para H1 y N1
+    int es_miembro;          // Para comprobar si SIGUSR1 está pendiente
+    int status;              // Estado para la función watipid()
 
 
     /*
@@ -40,10 +76,14 @@ int main(){
      * que establezcamos para P con respecto a las señales SIGUSR1 y
      * SIGUSR2, pero no es un detalle relevante, puesto que ni H1 ni N1
      * recibirán estas señales.
+     *
+     * Lo mismo aplica para la máscara de señales bloqueadas, que también se
+     * hereda. Dado que ni H1 ni N1 reciben SIGUSR1, nos es indiferente que
+     * ellos no puedan procesar dicha señal.
      */
 
 
-    // Damos la dirección de la función a ejecutar al recibir la señal
+    // Damos la dirección de la función a ejecutar al recibir SIGUSR1
     nueva_accion.sa_handler = gestion_sigusr1;
     // Dejamos vacío el conjunto de señales bloqueadas (de indicar alguna,
     // quedaría como pendiente hasta que se libere el bloqueo).
@@ -52,10 +92,11 @@ int main(){
     // sistema (como waitpid()) cuando son interrumpidas por un gestor de señal
     nueva_accion.sa_flags = SA_RESTART;
 
+    // Establecemos el gestor para SIGUSR1 con sigaction()
     if (sigaction(SIGUSR1, &nueva_accion, NULL) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se pudo establecer el gestor "
-                "de SIGUSR1", 1);
-        perror("Error");
+                "de SIGUSR1", 1, RESET);
+        perror("Error");    // Imprimos el mensaje de error que da errno
         exit(EXIT_FAILURE);
     }
 
@@ -64,13 +105,13 @@ int main(){
     nueva_accion.sa_handler = gestion_sigusr2;
     if (sigaction(SIGUSR2, &nueva_accion, NULL) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se pudo establecer el gestor "
-                "de SIGUSR2", 1);
+                "de SIGUSR2", 1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
     }
 
     imprimir_mensaje_y_hora("Soy P.\n\tSe han establecido los gestores de "
-            "SIGUSR1 y SIGUSR2", 0);
+            "SIGUSR1 y SIGUSR2", 0, ROJO);
 
     // Antes de crear a H1, P bloquea la señal SIGUSR1. De recibirla, quedará
     // pendiente hasta que se desbloquee.
@@ -78,12 +119,14 @@ int main(){
     sigaddset(&mascara, SIGUSR1);   // Añadimos la señal SIGUSR1 a la máscara
     // Añadimos la máscara al conjunto de señales bloqueadas.
     if (sigprocmask(SIG_BLOCK, &mascara, NULL) == -1){
-        imprimir_mensaje_y_hora("Soy P.\n\tNo se pudo bloquear SIGUSR1", 1);
+        imprimir_mensaje_y_hora("Soy P.\n\tNo se pudo bloquear SIGUSR1",
+                1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
     }
 
-    imprimir_mensaje_y_hora("Soy P.\n\tSe ha bloqueado la senhal SIGUSR1", 0);
+    imprimir_mensaje_y_hora("Soy P.\n\tSe ha bloqueado la senhal SIGUSR1",
+            0, ROJO);
 
 
     // El padre crea al hijo H1
@@ -94,13 +137,16 @@ int main(){
         ejecutar_h1(p, div_n1);    // Trabajo de H1
     }
 
+
     // Solo P sigue ejecutando el main() a partir de este punto
 
     imprimir_mensaje_y_hora("Soy P.\n\tVoy a dormir hasta que me despierte "
-            "una senhal", 0);
+            "una senhal", 0, ROJO);
     pause();   // pause() solo termina cuando se recibe una señal que termina
                // el proceso o que se deriva a un gestor de señales
-    imprimir_mensaje_y_hora("Soy P.\n\tHe despertado", 0);
+    // Al desbloquearse, lo primero que hará P será gestionar la señal que
+    // lo ha despertado (será SIGUSR2). Después, vuelve a este punto
+    imprimir_mensaje_y_hora("Soy P.\n\tEstoy despierto", 0, ROJO);
 
 
     /*
@@ -110,7 +156,7 @@ int main(){
      */
     if (sigpending(&pendientes) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se ha podido comprobar qué "
-                "señales están pendientes en P", 1);
+                "señales están pendientes en P", 1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
     }
@@ -118,39 +164,49 @@ int main(){
     // Comprobamos si SIGUSR1 está presente en pendientes
     if ((es_miembro = sigismember(&pendientes, SIGUSR1)) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se ha podido comprobar si "
-            "SIGUSR1 es una de las senhales que están pendientes", 1);
+            "SIGUSR1 es una de las senhales que están pendientes", 1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
-    } else if (es_miembro == 0){
+    } else if (es_miembro == 0){     // SIGUSR1 no está en pendientes
         imprimir_mensaje_y_hora("Soy P.\n\tError: No se ha recibido la senhal "
-                "SIGUSR1", 1);
+                "SIGUSR1", 1, RESET);
         exit(EXIT_FAILURE);
     }
 
-    imprimir_mensaje_y_hora("Soy P.\n\tEl procesamiento de la senhal "
-            "SIGUSR1 está pendiente. Procedo a desloquearla", 0);
+    // sigismember() ha devuelto 1 (SIGUSR1 es un elemento de pendientes)
+    imprimir_mensaje_y_hora("Soy P.\n\tSe ha verificado que el procesamiento "
+            "de la senhal SIGUSR1 está pendiente. Procedo a desloquearla",
+            0, ROJO);
 
     // Podemos reutilizar mascara, ya que sigprocmask no la modifica
     // (es un parámetro constante)
     // Eliminamos SIGUSR1 del conjunto de señales bloqueadas
     if (sigprocmask(SIG_UNBLOCK, &mascara, NULL) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se ha podido desbloquear la "
-                "senhal SIGUSR1", 1);
+                "senhal SIGUSR1", 1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
     }
 
-    // P espera a que termine H1, que a su vez espera a N1
+    /*
+     * Al desbloquear SIGUSR1, automáticamente se gestiona la recepción de la
+     * señal que estaba pendiente. Es decir, se llama a gestion_sigusr1.
+     */
+
+     imprimir_mensaje_y_hora("Soy P.\n\tVoy a esperar a que H1 termine",
+             0, ROJO);
+
+    // P espera a que termine H1, que a su vez esperó a N1
     if (waitpid(div_h1, &status, 0) == -1){
         imprimir_mensaje_y_hora("Soy P.\n\tHa tenido lugar un error al "
-                "esperar por H1", 1);
+                "esperar por H1", 1, RESET);
         perror("Error");
         exit(EXIT_FAILURE);
     }
 
     if (!WIFEXITED(status)){
         imprimir_mensaje_y_hora("Soy P.\n\tNo se pudo recuperar el PID del "
-                "nieto.", 1);
+                "nieto.", 1, RESET);
         exit(EXIT_FAILURE);
     }
 
@@ -161,13 +217,16 @@ int main(){
      * comprobar el valor del código completo, H1 imprimirá también
      * el resultado de operar en módulo 2^8 = 256 para compararlos.
      */
-    imprimir_mensaje_y_hora("Soy P", 0);
+    imprimir_mensaje_y_hora("Soy P.\n\tH1 ha terminado y ha indicado como "
+            "valor de su exit() el PID de N1", 0, ROJO);
     // Separamos los mensajes para pasar argumentos (no hay riesgo de
     // solapamiento con líneas de otros procesos porque ya han acabado)
-    printf("PID del nieto mod 256: %d\n", WEXITSTATUS(status));
+    printf("\t%sPID del nieto mod 256: %d%s\n",
+            ROJO, WEXITSTATUS(status), RESET);
 
     exit(EXIT_SUCCESS);
 }
+
 
 
 /*
@@ -182,8 +241,16 @@ int main(){
  * provocado su ejecución.
  */
 void gestion_sigusr1(int numero_de_senhal){
-    printf("Recibida SIGUSR1!\n");
+    /*
+     * Aunque al dividir los mensajes para imprimir la hora y el PID nos
+     * arriesgamos a que se solapen con mensajes de otros procesos, al solo
+     * usar magenta para los gestores de señales será sencillo distinguirlos.
+     */
+    imprimir_mensaje_y_hora("", 0, MAGENTA);
+    printf("\t%sMi PID es %d\n\tRecibida SIGURS1!%s\n",
+            MAGENTA, getpid(), RESET);
 }
+
 
 /*
  * Función gestora de la señal SIGUSR2. Imprime un mensaje sobre su recepción.
@@ -191,8 +258,16 @@ void gestion_sigusr1(int numero_de_senhal){
  * provocado su ejecución.
  */
 void gestion_sigusr2(int numero_de_senhal){
-    printf("Recibida SIGUSR2!\n");
+    /*
+     * Aunque al dividir los mensajes para imprimir la hora y el PID nos
+     * arriesgamos a que se solapen con mensajes de otros procesos, al solo
+     * usar magenta para los gestores de señales será sencillo distinguirlos.
+     */
+    imprimir_mensaje_y_hora("", 0, MAGENTA);
+    printf("\t%sMi PID es %d\n\tRecibida SIGURS2!%s\n",
+            MAGENTA, getpid(), RESET);
 }
+
 
 
 /*
@@ -207,25 +282,48 @@ void gestion_sigusr2(int numero_de_senhal){
 void ejecutar_h1(int p, int n1){
     int status;
 
-    sleep(1);
+    /*
+     * Para tener la seguridad de que P imprime sus mensajes con respecto a
+     * pause() sin interferencia por parte de H1, este espera 2 segundos
+     * sin hacer nada.
+     */
+    sleep(2);
 
-    imprimir_mensaje_y_hora("Soy H1.\n\tEmpiezo mi trabajo");
+    imprimir_mensaje_y_hora("Soy H1.\n\tEmpiezo mi trabajo", 0, VERDE);
+    printf("\t%sPID de H1: %d%s\n", VERDE, getpid(), RESET);
 
+    /*
+     * H1 le envía SIGUSR1 a P, que mantendrá la señal bloqueada hasta que
+     * termine de ejecutar pause(). Esto ocurrirá cuando reciba SIGUSR2
+     * por parte de N1.
+     */
     if (kill(p, SIGUSR1) == -1){
-        perror("H1 no pudo enviar SIGUSR1 a P");
+        imprimir_mensaje_y_hora("Soy H1.\n\tNo pude enviar SIGUSR1 a P",
+                1, RESET);
+        perror("Error");
         exit(n1);
     }
 
-    imprimir_mensaje_y_hora("Soy H1\n\tSenhal SIGUSR1 enviada a P");
+    imprimir_mensaje_y_hora("Soy H1.\n\tSenhal SIGUSR1 enviada a P\n"
+            "\tVoy a esperar a que N1 termine", 0, VERDE);
 
+    // H1 espera a que N1 termine de ejecutarse
     if (waitpid(-1, &status, 0) == -1){
-        perror("Error en H1 al esperar por N1");
+        imprimir_mensaje_y_hora("Soy H1.\n\tError al esperar por N1",
+                1, RESET);
+        perror("Error");
         exit(n1);
     }
 
-    imprimir_mensaje_y_hora("Soy H1\n\tTras finalizar N1, yo también "
-            "termino...");
+    imprimir_mensaje_y_hora("Soy H1.\n\tTras finalizar N1, yo también "
+            "termino...", 0, VERDE);
 
+    /*
+     * H1 indica el PID de N1 como valor de exit(). Una opción sería recuperar
+     * dicho PID a través de waitpid(), si N1 eligiera tal valor como código
+     * de su respectivo exit(). No obstante, dado que el PID de N1 fue
+     * accesible por H1 directamente al ejecutar fork(), lo tomamos de ahí.
+     */
     exit(n1);
 }
 
@@ -239,30 +337,56 @@ void ejecutar_h1(int p, int n1){
  */
 void ejecutar_n1(int p){
 
-    sleep(1);
+    /*
+     * Para tener la seguridad de que a P le da tiempo a ejecutar pause()
+     * antes de que N1 le envíe una señal SIGUSR2, N1 se pone a dormir durante
+     * 4 segundos preventivos. Además, dado que H1 solo va a dormir 2
+     * segundos, tenemos la seguridad de que N1 enviará SIGUSR2 después
+     * de que H1 haga lo propio con SIGUSR1.
+     */
+    sleep(4);
 
-    imprimir_mensaje_y_hora("Soy N1.\n\tEmpiezo mi trabajo");
-    printf("\tPID de N1: %d\n", getpid());
+    imprimir_mensaje_y_hora("Soy N1.\n\tEmpiezo mi trabajo", 0, CYAN);
+    printf("\t%sPID de N1: %d%s\n", CYAN, getpid(), RESET);
+    /*
+     * P no podrá ver el valor del PID de N1 completo, pues accederá a él a
+     * través de WEXITSTATUS(), que solo devuelve los 8 bits menos
+     * significativos del código de salida. Para poder determinar si el valor
+     * es correcto, N1 muestra cuál es su PID en módulo 2^8=256.
+     */
+    printf("\t%sPID de N1 mod 256: %d%s\n", CYAN, getpid() % 256, RESET);
 
+    /*
+     * H1 envía SIGUSR2 al proceso padre. Esto lo despertará del pause(), y
+     * gestionará la señal inmediatamente después.
+     * Como SIGUSR1 seguirá bloqueada, P procesará SIGUSR2 antes que SIGUSR1,
+     * a pesar de que las recibió en orden inverso.
+     */
     if (kill(p, SIGUSR2) == -1){
-        perror("N1 no pudo enviar SIGUSR2 a P");
+        imprimir_mensaje_y_hora("Soy N1.\n\tNo pude enviar SIGUSR2 a P",
+                1, RESET);
+        perror("Error");
         exit(EXIT_FAILURE);
     }
 
-    imprimir_mensaje_y_hora("Soy N1.\n\tSenhal SIGUSR2 enviada a P");
+    imprimir_mensaje_y_hora("Soy N1.\n\tSenhal SIGUSR2 enviada a P\n"
+            "\tVoy a esperar 5 segundos", 0, CYAN);
 
-    sleep(5);
-    imprimir_mensaje_y_hora("Soy N1.\n\tHan pasado 5 s; finalizando...");
+    sleep(5);    // N1 duerme 5 segundos antes de terminar
+    imprimir_mensaje_y_hora("Soy N1.\n\tHan pasado 5 s; finalizando...",
+            0, CYAN);
     exit(EXIT_SUCCESS);
 }
+
+
 
 /*
  * Función que encapsula un fork() junto al tratamiento de sus errores.
  * Si hay algún fallo, el proceso termina. En caso contrario, la función
  * devuelve el resultado del fork().
  */
-int crear_proceso(){
-    int res;
+pid_t crear_proceso(){
+    pid_t res;
 
     if ((res = fork()) == -1){
         perror("Error - creación de un proceso hijo fallida");
@@ -270,7 +394,21 @@ int crear_proceso(){
     } else return res;
 }
 
-void imprimir_mensaje_y_hora(char * msg, int error){
+
+/*
+ * Función auxiliar que imprime la hora actual junto a un mensaje pasado por
+ * el usuario. Si se trata de un mensaje de error, utiliza fprintf y el
+ * stream stderr. En caso contrario, usa printf. Además, el texto se muestra
+ * con el color indicado como parámetro.
+ *
+ * Parámetros (todos de entrada):
+ *      - msg: cadena de texto a imprimir después de la hora
+ *      - error: debe ser 0 si no se trata de un error y !0 en caso contrario
+ *      - color: color en el que se mostrará el texto (una de las constantes
+ *               definidas en el programa: CYAN, MAGENTA, VERDE, ROJO o
+ *               RESET, para usar el color predeterminado).
+ */
+void imprimir_mensaje_y_hora(char * msg, int error, char * color){
     time_t t;                // Guardará el resultado de time()
     struct tm *t_local;      // Tiempo en la zona horaria local
     struct timeval t_milis;  // Guardará el resultado de gettimeofday()
@@ -301,11 +439,12 @@ void imprimir_mensaje_y_hora(char * msg, int error){
 
     if (error){
         // Imprimimos 6 dígitos para los milisegundos
-        fprintf(stderr, "Hora: %d:%d:%d:%06ld. %s\n", t_local->tm_hour,
-                t_local->tm_min, t_local->tm_sec, t_milis.tv_usec, msg);
-        return;
+        fprintf(stderr, "%sHora: %d:%d:%d:%06ld. %s%s\n",
+                color, t_local->tm_hour, t_local->tm_min, t_local->tm_sec,
+                t_milis.tv_usec,msg, RESET);
     }
 
-    printf("Hora: %d:%d:%d:%06ld. %s\n", t_local->tm_hour, t_local->tm_min,
-        t_local->tm_sec, t_milis.tv_usec, msg);
+    printf("%sHora: %d:%d:%d:%06ld. %s%s\n",
+            color, t_local->tm_hour, t_local->tm_min, t_local->tm_sec,
+            t_milis.tv_usec,msg, RESET);
 }
