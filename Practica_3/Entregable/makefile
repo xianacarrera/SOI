@@ -2,7 +2,7 @@
 CC = gcc -Wall
 
 # Ficheros fuente
-SRCS = ej4.c ej7.c ej8.c
+SRCS = ejercicio_4.c ejercicio_7.c ejercicio_8.c
 
 # Nombres de los ejecutables: nombres de los ficheros fuente sin extensión
 OUTPUTS = $(SRCS:.c=)
@@ -34,4 +34,4 @@ cleanall: clean
 # Borra todos los archivos .o utilizando el wildcard * (match con cualquier carácter)
 # dentro del directorio actual
 clean: 
-	rm -f $(OUTPUTS) *.o
+	rm -f *.o
